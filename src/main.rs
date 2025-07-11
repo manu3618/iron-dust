@@ -11,4 +11,8 @@ fn main() {
     for (k, v) in ('a'..'e').enumerate() {
         net.insert_value(k as u128, String::from(v));
     }
+
+    net.get_value(0);
+    net.get_value(1);
+    net.kill_node();
 }

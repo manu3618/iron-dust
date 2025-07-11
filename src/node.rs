@@ -2,7 +2,7 @@
 use rand::Rng;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender};
 
 #[derive(Debug, Eq, PartialEq, Hash, Default, Copy, Clone)]
 struct Cookie(u128);
@@ -90,6 +90,7 @@ impl<V> Node<V> {
     pub fn get_id(&self) -> NodeId {
         self.id
     }
+
     fn handle_message(&mut self, msg: Message<V>) {
         todo!()
     }
@@ -119,13 +120,20 @@ impl<V> Node<V> {
     }
 
     fn find_node(&mut self, id: NodeId) {
+        let alpha = 3;
+        let init_best = self
+            .recent
+            .iter()
+            .map(|&x| NodeId::from(x).dist(&self.id))
+            .min();
         todo!()
     }
 
-    fn store(&mut self, key: u128, value: V) {
+    pub fn store(&mut self, key: u128, value: V) {
         todo!()
     }
-    fn handle_communication(&mut self, msg: &Message<V>) {
+
+    fn get_response(&mut self, msg: &Message<V>) {
         todo!()
     }
 }

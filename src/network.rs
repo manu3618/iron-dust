@@ -55,20 +55,21 @@ impl<V: std::fmt::Debug + Default> Network<V> {
             .values()
             .choose(&mut rand::rng())
             .expect("Network should not be empty");
-        let node = node.lock().unwrap();
-        dbg!(node);
-        //node.insert_value(key, value);
+        {
+            let mut n = node.lock().unwrap();
+            &n.store(key, value);
+        }
     }
 }
 
 impl<V> Network<V> {
     /// Randomly select a node and ask this node to retrieve the value
-    pub fn get_value(&self) -> Option<V> {
+    pub fn get_value(&self, key: u128) -> Option<V> {
         todo!()
     }
 
     /// Randomly select a node and kill it
-    fn kill_node(&self) {
+    pub fn kill_node(&self) {
         todo!()
     }
 }
