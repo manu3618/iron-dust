@@ -2,7 +2,8 @@
 use rand::Rng;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
-use std::sync::mpsc::{Receiver, Sender};
+use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::time::{Duration, Instant, timeout_at};
 
 #[derive(Debug, Eq, PartialEq, Hash, Default, Copy, Clone)]
 struct Cookie(u128);
@@ -39,16 +40,16 @@ impl NodeId {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct Message<V> {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Message<V: std::clone::Clone + PartialEq> {
     src: NodeId,
     dst: NodeId,
     cookie: Cookie,
-    msg: MessageKind<V>,
+    msg: Payload<V>,
 }
 
-#[derive(Debug, Default)]
-pub(crate) enum MessageKind<V> {
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) enum Payload<V: std::clone::Clone> {
     #[default]
     Ping,
     Store {
@@ -60,7 +61,7 @@ pub(crate) enum MessageKind<V> {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct Node<V> {
+pub(crate) struct Node<V: std::clone::Clone + Eq + PartialEq> {
     id: NodeId,
     /// local part of the DHT
     data: HashMap<u128, V>,
@@ -71,13 +72,13 @@ pub(crate) struct Node<V> {
     /// IDs of known neighbors
     neighbors: Vec<u128>,
     /// state of connections being served
-    active_connections: HashMap<Cookie, Message<V>>,
+    active_connections: HashMap<Cookie, Vec<Message<V>>>,
     /// connection to network, if any
     pub(crate) sender: Option<Sender<Message<V>>>,
     pub(crate) receiver: Option<Receiver<Message<V>>>,
 }
 
-impl<V: Default> Node<V> {
+impl<V: Default + std::clone::Clone + PartialEq + Eq> Node<V> {
     pub(crate) fn new() -> Self {
         Self {
             id: NodeId::new(),
@@ -86,16 +87,70 @@ impl<V: Default> Node<V> {
     }
 }
 
-impl<V> Node<V> {
+impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
     pub fn get_id(&self) -> NodeId {
         self.id
     }
 
-    fn handle_message(&mut self, msg: Message<V>) {
+    /// await, receive, queue, handle messages.
+    async fn receive_messages(&mut self) {
+        let mut receiver = self
+            .sender
+            .clone()
+            .expect("connection to network should be set")
+            .subscribe();
+        while let Ok(resp) = receiver.recv().await {
+            let cookie = resp.cookie.clone();
+            self.active_connections
+                .entry(cookie)
+                .or_insert(Vec::new())
+                .push(resp);
+            self.drain_messages().await;
+        }
         todo!()
     }
 
-    pub(crate) fn send_message(&self, dst: NodeId, msg: MessageKind<V>) {
+    /// handle all messages queued for now
+    ///
+    async fn drain_messages(&mut self) {
+        // self.active_connections may be modified during processing of to_treat
+        let mut to_treat = self.active_connections.clone();
+        let mut to_reinsert = HashMap::new();
+        for (cookie, messages) in to_treat.drain() {
+            for message in messages {
+                // may modify self.active_connections
+                if !self.handle_message(&message).is_ok() {
+                    // this message should be reinserted
+                    to_reinsert
+                        .entry(cookie)
+                        .or_insert(Vec::new())
+                        .push(message)
+                }
+            }
+        }
+
+        // reinsert skipped messages
+        for (cookie, mut messages) in to_reinsert {
+            self.active_connections
+                .entry(cookie)
+                .or_insert(Vec::new())
+                .append(&mut messages)
+        }
+    }
+
+    /// Handle a single message
+    ///
+    /// Return Ok(()) if the message can be handled immediately
+    fn handle_message(&self, msg: &Message<V>) -> Result<(), String> {
+        match msg.msg {
+            Payload::Ping => todo!(),
+            Payload::Store { .. } => todo!(),
+            Payload::FindNode(_) => todo!(),
+            Payload::FindValue(_) => todo!(),
+        }
+    }
+
+    pub(crate) fn send_message(&self, dst: NodeId, msg: Payload<V>) {
         let message = Message {
             src: self.get_id(),
             dst,
@@ -107,19 +162,28 @@ impl<V> Node<V> {
         }
     }
 
-    fn receive_message(&self) {
-        if let Some(rx) = &self.receiver {
-            while let Ok(msg) = rx.recv() {
-                if msg.dst != self.id {
-                    // get a message for another node
-                    continue;
-                }
-                todo!()
+    async fn get_response(&mut self, msg: Message<V>) -> Option<Message<V>> {
+        let mut receiver = self.sender.clone()?.subscribe();
+        let cookie = msg.cookie.clone();
+        let _ = self.sender.clone()?.send(msg.clone());
+        while let Ok(Ok(resp)) =
+            timeout_at(Instant::now() + Duration::from_secs(10), receiver.recv()).await
+        {
+            if resp == msg {
+                continue;
             }
+            if cookie == resp.cookie {
+                return Some(resp);
+            }
+            self.active_connections
+                .entry(cookie.clone())
+                .or_insert(Vec::new())
+                .push(resp)
         }
+        self.active_connections.get_mut(&cookie)?.pop()
     }
 
-    fn find_node(&mut self, id: NodeId) {
+    async fn find_node(&mut self, id: NodeId) {
         let alpha = 3;
         let init_best = self
             .recent
@@ -130,10 +194,6 @@ impl<V> Node<V> {
     }
 
     pub fn store(&mut self, key: u128, value: V) {
-        todo!()
-    }
-
-    fn get_response(&mut self, msg: &Message<V>) {
         todo!()
     }
 }

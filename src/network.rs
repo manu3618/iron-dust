@@ -1,34 +1,30 @@
 /// Simulation of network
 ///
 ///
-use crate::node::{Message, MessageKind, Node, NodeId};
+use crate::node::{Message, Node, NodeId, Payload};
 use rand::seq::IteratorRandom;
 use std::collections::{HashMap, VecDeque};
-use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast::{Receiver, Sender, channel};
 
 #[derive(Debug)]
-pub(crate) struct Network<V> {
+pub(crate) struct Network<V: std::clone::Clone + PartialEq + Eq> {
     nodes: HashMap<NodeId, Arc<Mutex<Node<V>>>>,
     messages: VecDeque<Message<V>>,
 
     /// message channel, from node to network
-    net_receiver: Receiver<Message<V>>,
-    net_sender: Sender<Message<V>>,
-
-    /// message channels, from network to node
-    node_sender: Vec<Sender<Message<V>>>,
+    node_receiver: Receiver<Message<V>>,
+    node_sender: Sender<Message<V>>,
 }
 
-impl<V: std::fmt::Debug + Default> Network<V> {
+impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<V> {
     pub fn new() -> Self {
-        let (tx, rx) = channel();
+        let (tx, rx) = channel(16);
         Self {
             nodes: Default::default(),
             messages: Default::default(),
-            net_receiver: rx,
-            net_sender: tx.clone(),
-            node_sender: Vec::new(),
+            node_receiver: rx,
+            node_sender: tx,
         }
     }
 
@@ -36,13 +32,12 @@ impl<V: std::fmt::Debug + Default> Network<V> {
     pub fn add_node(&mut self) -> NodeId {
         let mut new_node = Node::new();
         let new_id = new_node.get_id();
-        new_node.sender = Some(self.net_sender.clone());
-        let (tx, rx) = channel();
-        new_node.receiver = Some(rx);
-        self.node_sender.push(tx);
+
+        new_node.sender = Some(self.node_sender.clone());
+        new_node.receiver = Some(self.node_sender.subscribe());
 
         if let Some(&dst) = self.nodes.keys().choose(&mut rand::rng()) {
-            new_node.send_message(dst, MessageKind::FindNode(new_id))
+            new_node.send_message(dst, Payload::FindNode(new_id))
         }
         self.nodes.insert(new_id, Arc::new(Mutex::new(new_node)));
         new_id
@@ -62,7 +57,7 @@ impl<V: std::fmt::Debug + Default> Network<V> {
     }
 }
 
-impl<V> Network<V> {
+impl<V: std::clone::Clone + Eq + PartialEq> Network<V> {
     /// Randomly select a node and ask this node to retrieve the value
     pub fn get_value(&self, key: u128) -> Option<V> {
         todo!()
