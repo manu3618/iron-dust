@@ -92,24 +92,6 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
         self.id
     }
 
-    /// await, receive, queue, handle messages.
-    async fn receive_messages(&mut self) {
-        let mut receiver = self
-            .sender
-            .clone()
-            .expect("connection to network should be set")
-            .subscribe();
-        while let Ok(resp) = receiver.recv().await {
-            let cookie = resp.cookie.clone();
-            self.active_connections
-                .entry(cookie)
-                .or_insert(Vec::new())
-                .push(resp);
-            self.drain_messages().await;
-        }
-        todo!()
-    }
-
     /// handle all messages queued for now
     ///
     async fn drain_messages(&mut self) {
@@ -162,6 +144,7 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
         }
     }
 
+    /// Get the response for the message msg
     async fn get_response(&mut self, msg: Message<V>) -> Option<Message<V>> {
         let mut receiver = self.sender.clone()?.subscribe();
         let cookie = msg.cookie.clone();
