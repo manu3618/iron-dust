@@ -5,6 +5,10 @@ use std::hash::Hash;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::time::{Duration, Instant, timeout_at};
 
+/// Maximu number of known neighbors.
+/// The default behavior is to keep only the most recent one
+static MAX_NEIGHBORS: usize = 8;
+
 #[derive(Debug, Eq, PartialEq, Hash, Default, Copy, Clone)]
 struct Cookie(u128);
 
@@ -57,6 +61,8 @@ pub(crate) enum Payload<V: std::clone::Clone> {
         value: V,
     },
     FindNode(NodeId),
+    /// Answer to FindNode
+    KnownNodes(Vec<NodeId>),
     FindValue(u128),
 }
 
@@ -68,9 +74,9 @@ pub(crate) struct Node<V: std::clone::Clone + Eq + PartialEq> {
     /// Message to be processed
     waiting_messages: HashMap<u128, VecDeque<Message<V>>>,
     /// Last neighbors seen
-    recent: VecDeque<u128>,
+    recent: VecDeque<NodeId>,
     /// IDs of known neighbors
-    neighbors: Vec<u128>,
+    neighbors: Vec<NodeId>,
     /// state of connections being served
     active_connections: HashMap<Cookie, Vec<Message<V>>>,
     /// connection to network, if any
@@ -123,11 +129,13 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
     /// Handle a single message
     ///
     /// Return Ok(()) if the message can be handled immediately
-    fn handle_message(&self, msg: &Message<V>) -> Result<(), String> {
+    fn handle_message(&mut self, msg: &Message<V>) -> Result<(), String> {
+        requeue(&mut self.recent, msg.src, MAX_NEIGHBORS);
         match msg.msg {
             Payload::Ping => todo!(),
             Payload::Store { .. } => todo!(),
             Payload::FindNode(_) => todo!(),
+            Payload::KnownNodes(_) => todo!(),
             Payload::FindValue(_) => todo!(),
         }
     }
@@ -166,6 +174,29 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
         self.active_connections.get_mut(&cookie)?.pop()
     }
 
+    fn answer_find_node(&self, msg: Message<V>) {
+        if let Payload::FindNode(s) = msg.msg {
+            let ans = Message {
+                src: msg.dst,
+                dst: msg.src,
+                cookie: msg.cookie,
+                msg: Payload::KnownNodes(self.get_nearest_nodes(s)),
+            };
+            if let Some(tx) = &self.sender {
+                tx.send(ans);
+            }
+        }
+    }
+
+    /// Get the k known nearest nodes
+    fn get_nearest_nodes(&self, id: NodeId) -> Vec<NodeId> {
+        let k = 3;
+        let mut nearest = self.recent.iter().cloned().collect::<Vec<_>>();
+        nearest.sort_by(|a, b| a.dist(&id).cmp(&b.dist(&id)));
+        nearest.truncate(k);
+        nearest
+    }
+
     async fn find_node(&mut self, id: NodeId) {
         let alpha = 3;
         let init_best = self
@@ -178,6 +209,19 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
 
     pub fn store(&mut self, key: u128, value: V) {
         todo!()
+    }
+}
+
+fn requeue<T>(v: &mut VecDeque<T>, value: T, max_size: usize)
+where
+    T: PartialEq,
+{
+    if let Some(idx) = v.iter().position(|x| *x == value) {
+        v.remove(idx);
+    }
+    v.push_back(value);
+    while v.len() > max_size {
+        v.pop_front();
     }
 }
 
