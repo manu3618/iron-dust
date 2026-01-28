@@ -3,13 +3,14 @@ mod network;
 mod node;
 use network::Network;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let mut net = Network::new();
     for _ in 0..3 {
         net.add_node();
     }
     for (k, v) in ('a'..'e').enumerate() {
-        net.insert_value(k as u128, String::from(v));
+        net.insert_value(k as u128, String::from(v)).await;
     }
 
     net.get_value(0);

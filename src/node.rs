@@ -5,7 +5,7 @@ use std::hash::Hash;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::time::{Duration, Instant, timeout_at};
 
-/// Maximu number of known neighbors.
+/// Maximum number of known neighbors.
 /// The default behavior is to keep only the most recent one
 static MAX_NEIGHBORS: usize = 8;
 
@@ -44,7 +44,7 @@ impl NodeId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct Message<V: std::clone::Clone + PartialEq> {
     src: NodeId,
     dst: NodeId,
@@ -64,6 +64,15 @@ pub(crate) enum Payload<V: std::clone::Clone> {
     /// Answer to FindNode
     KnownNodes(Vec<NodeId>),
     FindValue(u128),
+}
+
+impl<V: std::clone::Clone + PartialEq + Default> Message<V> {
+    pub fn new() -> Self {
+        Self {
+            cookie: Cookie::new(),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -204,10 +213,29 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
             .iter()
             .map(|&x| NodeId::from(x).dist(&self.id))
             .min();
-        todo!()
+        todo!() // XXX: send FindNode to alpha nodes nearest to target.
     }
 
-    pub fn store(&mut self, key: u128, value: V) {
+    pub async fn store(&mut self, key: u128, value: V) {
+        if let Some(mut v) = self.data.get_mut(&key) {
+            todo!()
+        }
+
+        // Update nearest nodes
+        self.find_node(key.into()).await;
+
+        // Duplicate data
+        for dst in self.get_nearest_nodes(key.into()) {
+            let msg = Payload::Store {
+                key: key.into(),
+                value: value.clone(),
+            };
+            self.send_message(dst, msg);
+        }
+        self.data.insert(key, value);
+    }
+
+    pub async fn get_value(&mut self, key: u128) -> Option<V> {
         todo!()
     }
 }
@@ -243,5 +271,10 @@ mod test {
                 assert!(a.dist(&b) <= a.dist(&c) + c.dist(&b));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_answer() {
+        assert!(true);
     }
 }

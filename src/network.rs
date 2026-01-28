@@ -44,7 +44,7 @@ impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<
     }
 
     /// Randomly select a node and ask this node to insert a value
-    pub fn insert_value(&mut self, key: u128, value: V) {
+    pub async fn insert_value(&mut self, key: u128, value: V) {
         let node = self
             .nodes
             .values()
@@ -52,7 +52,7 @@ impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<
             .expect("Network should not be empty");
         {
             let mut n = node.lock().unwrap();
-            &n.store(key, value);
+            &n.store(key, value).await;
         }
     }
 }
@@ -60,6 +60,11 @@ impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<
 impl<V: std::clone::Clone + Eq + PartialEq> Network<V> {
     /// Randomly select a node and ask this node to retrieve the value
     pub fn get_value(&self, key: u128) -> Option<V> {
+        let node = self.nodes.values().choose(&mut rand::rng())?;
+
+        let mut n = node.lock().unwrap();
+        n.get_value(key);
+
         todo!()
     }
 
