@@ -4,7 +4,8 @@
 use crate::node::{Message, Node, NodeId, Payload};
 use rand::seq::IteratorRandom;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 
 #[derive(Debug)]
@@ -50,20 +51,21 @@ impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<
             .values()
             .choose(&mut rand::rng())
             .expect("Network should not be empty");
-        {
-            let mut n = node.lock().unwrap();
-            &n.store(key, value).await;
-        }
+
+        let n = Arc::clone(&node);
+        let mut n = n.lock().await;
+        &n.store(key, value).await;
     }
 }
 
 impl<V: std::clone::Clone + Eq + PartialEq> Network<V> {
     /// Randomly select a node and ask this node to retrieve the value
-    pub fn get_value(&self, key: u128) -> Option<V> {
+    pub async fn get_value(&self, key: u128) -> Option<V> {
         let node = self.nodes.values().choose(&mut rand::rng())?;
 
-        let mut n = node.lock().unwrap();
-        n.get_value(key);
+        let n = Arc::clone(&node);
+        let mut n = n.lock().await;
+        &n.get_value(key);
 
         todo!()
     }
