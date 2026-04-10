@@ -8,8 +8,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 
+// TODO: check which trait bound we can remove from V
 #[derive(Debug)]
-pub(crate) struct Network<V: std::clone::Clone + PartialEq + Eq> {
+pub(crate) struct Network<V: std::clone::Clone + PartialEq + Eq + Send> {
     nodes: HashMap<NodeId, Arc<Mutex<Node<V>>>>,
     messages: VecDeque<Message<V>>,
 
@@ -18,7 +19,7 @@ pub(crate) struct Network<V: std::clone::Clone + PartialEq + Eq> {
     node_sender: Sender<Message<V>>,
 }
 
-impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<V> {
+impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq + Send> Network<V> {
     pub fn new() -> Self {
         let (tx, rx) = channel(16);
         Self {
@@ -58,7 +59,7 @@ impl<V: std::fmt::Debug + Default + std::clone::Clone + Eq + PartialEq> Network<
     }
 }
 
-impl<V: std::clone::Clone + Eq + PartialEq> Network<V> {
+impl<V: std::clone::Clone + Eq + PartialEq + Send> Network<V> {
     /// Randomly select a node and ask this node to retrieve the value
     pub async fn get_value(&self, key: u128) -> Option<V> {
         let node = self.nodes.values().choose(&mut rand::rng())?;

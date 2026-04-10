@@ -5,6 +5,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, Instant, timeout_at};
 
 /// Maximum number of known neighbors.
@@ -112,17 +113,46 @@ impl<V: std::clone::Clone + PartialEq + Default> Message<V> {
     }
 }
 
+// TODO: impl methods
+/// List of NodeId
+#[derive(Default, Debug, Clone)]
+struct NodeIdList(Arc<Mutex<Vec<NodeId>>>);
+
+impl NodeIdList {
+    async fn push(&self, node: NodeId) {
+        let a = Arc::clone(&self.0);
+        a.lock().await.push(node);
+    }
+    async fn pop(&self) -> Option<NodeId> {
+        let a = Arc::clone(&self.0);
+        a.lock().await.pop()
+    }
+
+    async fn truncate_list(&self, reference: NodeId) -> Vec<NodeId> {
+        let a = Arc::clone(&self.0);
+        let mut v = a.lock().await;
+        reference.truncate_list(&mut v)
+    }
+
+    async fn to_vec(&self) -> Vec<NodeId> {
+        let a = Arc::clone(&self.0);
+        let v = a.lock().await;
+        v.clone()
+    }
+}
+
+// TODO: check which trait bound we can remove from V
 #[derive(Debug, Default)]
-pub(crate) struct Node<V: std::clone::Clone + Eq + PartialEq> {
+pub(crate) struct Node<V: std::clone::Clone + Eq + PartialEq + Send> {
     id: NodeId,
     /// local part of the DHT
-    data: HashMap<u128, V>,
+    data: Arc<Mutex<HashMap<u128, V>>>,
     /// Message to be processed
     waiting_messages: Arc<Mutex<HashMap<u128, VecDeque<Message<V>>>>>,
     /// Last neighbors seen
-    recent: Arc<Mutex<Vec<NodeId>>>,
+    recent: NodeIdList,
     /// IDs of known neighbors
-    neighbors: Arc<Mutex<Vec<NodeId>>>,
+    neighbors: NodeIdList,
     /// state of connections being served
     active_connections: Arc<Mutex<HashMap<Cookie, Vec<Message<V>>>>>,
     /// connection to network, if any
@@ -130,7 +160,7 @@ pub(crate) struct Node<V: std::clone::Clone + Eq + PartialEq> {
     pub(crate) receiver: Option<Receiver<Message<V>>>,
 }
 
-impl<V: Default + std::clone::Clone + PartialEq + Eq> Node<V> {
+impl<V: Default + std::clone::Clone + PartialEq + Eq + Send> Node<V> {
     pub(crate) fn new() -> Self {
         Self {
             id: NodeId::new(),
@@ -139,7 +169,7 @@ impl<V: Default + std::clone::Clone + PartialEq + Eq> Node<V> {
     }
 }
 
-impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
+impl<V: std::clone::Clone + Eq + PartialEq + Send> Node<V> {
     pub fn get_id(&self) -> NodeId {
         self.id
     }
@@ -178,10 +208,8 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
     /// Return Ok(()) if the message can be handled immediately
     async fn handle_message(&mut self, msg: &Message<V>) -> Result<(), String> {
         {
-            let recent = Arc::clone(&self.recent);
-            let mut recent = recent.lock().await;
-            recent.push(msg.src);
-            let rejected = self.id.truncate_list(&mut recent);
+            self.recent.push(msg.src).await;
+            let rejected = self.recent.truncate_list(self.id);
         }
         match msg.msg {
             Payload::Ping => todo!(),
@@ -205,11 +233,7 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
     }
 
     /// Get the response for the message msg
-    async fn get_payload_response(
-        &mut self,
-        dst: NodeId,
-        payload: Payload<V>,
-    ) -> Option<Payload<V>> {
+    async fn get_payload_response(&self, dst: NodeId, payload: Payload<V>) -> Option<Payload<V>> {
         let msg = Message {
             src: self.get_id(),
             dst,
@@ -261,19 +285,17 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
     /// Get the k known nearest nodes
     async fn get_nearest_nodes(&self, id: NodeId) -> Vec<NodeId> {
         let k = 3;
-        let recent = Arc::clone(&self.recent);
-        let mut recent = recent.lock().await;
-        let mut nearest = recent.iter().cloned().collect::<Vec<_>>();
+        let mut nearest = self.recent.to_vec().await;
         nearest.sort_by(|a, b| a.dist(&id).cmp(&b.dist(&id)));
         nearest.truncate(k);
-        nearest
+        nearest.to_vec()
     }
 
     /// Handle single FindNode message
     ///
     /// id: node to find
     /// dst: node asked
-    async fn find_node(&mut self, id: NodeId, dst: NodeId) {
+    async fn find_node(&self, id: NodeId, dst: NodeId) {
         let payload = Payload::FindNode(id);
         let message = Message {
             src: self.get_id(),
@@ -290,19 +312,33 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
     async fn lookup_node(&self, id: NodeId) {
         // TODO: to review
         let alpha = 3;
-        let recent = Arc::new(self.recent);
-        let mut recent = recent.lock().await;
+        let mut recent = self.recent.to_vec().await;
         recent.sort_by_key(|&x| x.dist(&self.id));
         let current_best = recent.first().expect("at least one known node");
-        let handlers = Vec::new();
+        // TODO: use a JoinSet
+        let mut set = JoinSet::new();
         for &n in recent.iter().take(alpha) {
-            handlers.push(tokio::spawn(self.find_node(id, n.clone())));
-            todo!();
+            // self.find_node(id, n.clone()).await;
+            set.spawn(async move { self.find_node(id, n.clone()).await });
+            // todo!();
+        }
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(_) => todo!(),
+                Err(_) => todo!(),
+            }
+            for _ in 0..(set.len() - alpha) {
+                todo!();
+                // set.spawn()
+            }
         }
     }
 
     pub async fn store(&mut self, key: u128, value: V) {
-        if let Some(v) = self.data.get_mut(&key) {
+        let local_data = Arc::clone(&self.data);
+        let mut local_data = local_data.lock().await;
+
+        if let Some(v) = local_data.get_mut(&key) {
             todo!()
         }
 
@@ -310,14 +346,14 @@ impl<V: std::clone::Clone + Eq + PartialEq> Node<V> {
         self.lookup_node(key.into()).await;
 
         // Duplicate data
-        for dst in self.get_nearest_nodes(key.into()) {
+        for dst in self.get_nearest_nodes(key.into()).await {
             let msg = Payload::Store {
                 key: key.into(),
                 value: value.clone(),
             };
             self.send_message(dst, msg);
         }
-        self.data.insert(key, value);
+        local_data.insert(key, value);
     }
 
     pub async fn get_value(&mut self, key: u128) -> Option<V> {
